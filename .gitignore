@@ -12,6 +12,7 @@ xcuserdata
 .DS_Store
 
 
+.npmrc
 
 # Based on Android gitignore template: https://github.com/github/gitignore/blob/HEAD/Android.gitignore
 
