@@ -1,6 +1,6 @@
 import Foundation
 import Capacitor
-import SwiftSocket
+import Socket
 
 /**
  * Please read the Capacitor iOS Plugin Development Guide
@@ -8,7 +8,7 @@ import SwiftSocket
  */
 @objc(TcpSocketPlugin)
 public class TcpSocketPlugin: CAPPlugin {
-    var clients: [TCPClient] = []
+    var clients: [Socket] = []
     
     @objc func connect(_ call: CAPPluginCall) {
         guard let ip = call.getString("ipAddress") else {
@@ -17,64 +17,95 @@ public class TcpSocketPlugin: CAPPlugin {
         }
         let port = Int32(call.getInt("port", 9100))
         
-        let client = TCPClient(address: ip, port: port)
-        switch client.connect(timeout: 10) {
-          case .success:
-            clients.append(client);
+        do {
+            let client = try Socket.create()
+            try client.connect(to: ip, port: port)
+            clients.append(client)
             call.resolve(["client": clients.count - 1])
-          case .failure(let error):
+        } catch {
             call.reject(error.localizedDescription)
         }
     }
     
     @objc func send(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
-        if (clientIndex == -1)    {
+        if (clientIndex == -1) {
             call.reject("No client specified")
-        }
-        let client = clients[clientIndex]
-        let data = call.getString("data", "")
-        
-        var byteArray = [Byte]()
-        for char in data.utf8{
-            byteArray += [char]
+            return
         }
         
-        switch client.send(data: byteArray) {
-          case .success:
+        guard let client = clients[safe: clientIndex] else {
+            call.reject("Invalid client index")
+            return
+        }
+        
+        guard let base64Data = call.getString("data") else {
+            call.reject("No data provided")
+            return
+        }
+        
+        do {
+            // Decode base64 string to raw Data
+            guard let decodedData = Data(base64Encoded: base64Data) else {
+                call.reject("Invalid base64 data")
+                return
+            }
+            
+            // Send the raw data
+            try client.write(from: decodedData)
             call.resolve()
-          case .failure(let error):
+        } catch {
             call.reject(error.localizedDescription)
         }
     }
     
     @objc func read(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
-        if (clientIndex == -1)    {
+        if (clientIndex == -1) {
             call.reject("No client specified")
+            return
         }
-        let client = clients[clientIndex]
+        
+        guard let client = clients[safe: clientIndex] else {
+            call.reject("Invalid client index")
+            return
+        }
         
         let expectLen = call.getInt("expectLen", 1024)
         let timeout = call.getInt("timeout", 10)
         
-        guard let response = client.read(expectLen, timeout: timeout),
-                let data = String(bytes: response, encoding: .utf8) else {
+        var buffer = Data(capacity: expectLen)
+        do {
+            let bytesRead = try client.read(into: &buffer)
+            if bytesRead > 0 {
+                // Return the raw data as base64 string
+                let base64String = buffer.base64EncodedString()
+                call.resolve(["result": base64String])
+            } else {
+                call.resolve(["result": ""])
+            }
+        } catch {
             call.resolve(["result": ""])
-            return
         }
-        
-        call.resolve(["result": data])
     }
     
     @objc func disconnect(_ call: CAPPluginCall) {
-        let clientIndex = call.getInt("client") ?? -1
-        if (clientIndex == -1)  {
+        let clientIndex = call.getInt("client", -1)
+        if (clientIndex == -1) {
             call.reject("No client specified")
+            return
         }
-        if (clients.indices.contains(clientIndex))   {
-            clients[clientIndex].close()
+        
+        if let client = clients[safe: clientIndex] {
+            client.close()
         }
         call.resolve(["client": clientIndex])
+    }
+}
+
+// Helper extension for safe array access
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }
