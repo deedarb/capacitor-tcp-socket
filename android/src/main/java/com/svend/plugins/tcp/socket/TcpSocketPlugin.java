@@ -17,6 +17,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -42,12 +43,14 @@ public class TcpSocketPlugin extends Plugin {
             return;
         }
         Integer port = call.getInt("port", 9100);
+        Integer timeout = call.getInt("timeout", 10); // Default 10 second timeout (in seconds)
 
         try {
             if (socket != null && socket.isConnected()) {
                 socket.close();
             }
-            socket = new Socket(ipAddress, port);
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(ipAddress, port), timeout * 1000); // Convert seconds to milliseconds
             clients.add(socket);
         } catch (IOException e) {
             Log.d("Connection failed", e.getMessage());

@@ -16,10 +16,11 @@ public class TcpSocketPlugin: CAPPlugin {
             return
         }
         let port = Int32(call.getInt("port", 9100))
+        let timeout = UInt(call.getInt("timeout", 10)) // Default 10 second timeout
         
         do {
             let client = try Socket.create()
-            try client.connect(to: ip, port: port)
+            try client.connect(to: ip, port: port, timeout: timeout)
             clients.append(client)
             call.resolve(["client": clients.count - 1])
         } catch {

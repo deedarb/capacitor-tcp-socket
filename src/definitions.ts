@@ -9,39 +9,43 @@ export interface TcpSocketPlugin {
 // types
 
 export interface ConnectOptions { 
-  ipAddress: string,
-  port?: number 
+  ipAddress: string;
+  port?: number;
+  /**
+   * Timeout in seconds.
+   * 
+   * default: 10
+   */
+  timeout?: number;
 }
 export interface ConnectResult {
   client: number;
 }
 
 export interface SendOptions { 
-  client: number,
-  data: string 
+  client: number;
+  data: string;
 }
 
 export interface ReadOptions { 
-  client: number,
-  expectLen: number,
+  client: number;
+  expectLen: number;
   /**
    * timeout in seconds.
    * 
    * default: 10
-   * 
-   * only ios supports timeout.
    */
-  timeout?: number
+  timeout?: number;
 }
 
 export interface ReadResult {
-  result?: string
+  result?: string;
 }
 
 export interface DisconnectOptions { 
-  client: number 
+  client: number;
 }
 
 export interface DisconnectResult { 
-  client: number
+  client: number;
 }
