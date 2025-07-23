@@ -96,10 +96,11 @@ disconnect(options: DisconnectOptions) => Promise<DisconnectResult>
 
 #### ConnectOptions
 
-| Prop            | Type                |
-| --------------- | ------------------- |
-| **`ipAddress`** | <code>string</code> |
-| **`port`**      | <code>number</code> |
+| Prop            | Type                | Description                     |
+| --------------- | ------------------- | ------------------------------- |
+| **`ipAddress`** | <code>string</code> |                                 |
+| **`port`**      | <code>number</code> |                                 |
+| **`timeout`**   | <code>number</code> | Timeout in seconds. default: 10 |
 
 
 #### SendOptions
@@ -119,11 +120,11 @@ disconnect(options: DisconnectOptions) => Promise<DisconnectResult>
 
 #### ReadOptions
 
-| Prop            | Type                | Description                                                |
-| --------------- | ------------------- | ---------------------------------------------------------- |
-| **`client`**    | <code>number</code> |                                                            |
-| **`expectLen`** | <code>number</code> |                                                            |
-| **`timeout`**   | <code>number</code> | timeout in seconds. default: 10 only ios supports timeout. |
+| Prop            | Type                | Description                     |
+| --------------- | ------------------- | ------------------------------- |
+| **`client`**    | <code>number</code> |                                 |
+| **`expectLen`** | <code>number</code> |                                 |
+| **`timeout`**   | <code>number</code> | timeout in seconds. default: 10 |
 
 
 #### DisconnectResult
