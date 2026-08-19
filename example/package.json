@@ -13,16 +13,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "latest",
-    "@capacitor/camera": "latest",
-    "@capacitor/splash-screen": "latest",
-    "capacitor-tcp-socket": "file:..",
-    "@capacitor/ios": "^5.0.0",
-    "@capacitor/android": "^5.0.0"
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/camera": "^8.0.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@deedarb/capacitor-tcp-socket": "file:.."
   },
   "devDependencies": {
-    "@capacitor/cli": "latest",
-    "vite": "^2.9.13"
+    "@capacitor/cli": "^8.5.0",
+    "vite": "^7.1.5"
   },
   "author": "",
   "license": "ISC"

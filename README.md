@@ -7,9 +7,16 @@ Thanks [@ottimis](https://www.npmjs.com/package/@ottimis/tcp-socket)
 ## Install
 
 ```bash
-npm install capacitor-tcp-socket
+npm install @deedarb/capacitor-tcp-socket
 npx cap sync
 ```
+
+## Version compatibility
+
+| Plugin | Capacitor | iOS   | Android            |
+| ------ | --------- | ----- | ------------------ |
+| 8.x    | 8.x       | 15.0+ | minSdk 24, Java 21 |
+| 7.x    | 7.x       | 14.0+ | minSdk 23, Java 21 |
 
 ## API
 
