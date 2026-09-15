@@ -3,36 +3,39 @@ package com.svend.plugins.tcp.socket;
 import android.Manifest;
 import android.os.Build;
 import android.util.Log;
-
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.Socket;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 
-@CapacitorPlugin(name = "TcpSocket", permissions = {
-        @Permission(
-                alias = "network",
-                strings = {Manifest.permission.ACCESS_NETWORK_STATE}
-        )
-})
+@CapacitorPlugin(
+    name = "TcpSocket",
+    permissions = { @Permission(alias = "network", strings = { Manifest.permission.ACCESS_NETWORK_STATE }) }
+)
 public class TcpSocketPlugin extends Plugin {
 
     private Socket socket;
     private DataOutputStream mBufferOut;
-    private List<Socket> clients = new ArrayList<>();
+    /**
+     * Synchronized: with a listening socket this list is also appended to from
+     * the accept thread, while JS keeps calling send/read on the main thread.
+     */
+    private final List<Socket> clients = Collections.synchronizedList(new ArrayList<>());
+    private final List<ServerSocket> servers = Collections.synchronizedList(new ArrayList<>());
 
     @PluginMethod()
     public void connect(PluginCall call) {
@@ -174,5 +177,66 @@ public class TcpSocketPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("client", client);
         call.resolve(ret);
+    }
+
+    @PluginMethod()
+    public void listen(PluginCall call) {
+        final Integer port = call.getInt("port", 9100);
+
+        final ServerSocket server;
+        try {
+            server = new ServerSocket(port);
+        } catch (IOException e) {
+            call.reject(e.getMessage());
+            return;
+        }
+        servers.add(server);
+        final int serverIndex = servers.size() - 1;
+
+        // accept() blocks until a peer arrives, so the loop cannot run on the
+        // thread serving JS calls.
+        new Thread(() -> {
+            while (!server.isClosed()) {
+                try {
+                    Socket accepted = server.accept();
+                    clients.add(accepted);
+                    JSObject event = new JSObject();
+                    event.put("server", serverIndex);
+                    event.put("client", clients.size() - 1);
+                    event.put("address", accepted.getInetAddress().getHostAddress());
+                    notifyListeners("connection", event);
+                } catch (IOException e) {
+                    // stopListening closed the socket, or accept failed
+                    return;
+                }
+            }
+        }).start();
+
+        JSObject ret = new JSObject();
+        ret.put("server", serverIndex);
+        call.resolve(ret);
+    }
+
+    @PluginMethod()
+    public void stopListening(PluginCall call) {
+        final Integer server = call.getInt("server", -1);
+        if (server == -1) {
+            call.reject("No server specified");
+            return;
+        }
+        if (server < 0 || server >= servers.size()) {
+            call.reject("Invalid server index");
+            return;
+        }
+
+        try {
+            // Closing the socket is what ends the accept loop: it makes the
+            // pending accept() throw, and the thread returns.
+            servers.get(server).close();
+        } catch (IOException e) {
+            call.reject(e.getMessage());
+            return;
+        }
+        call.resolve();
     }
 }
