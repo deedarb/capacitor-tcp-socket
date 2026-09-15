@@ -9,7 +9,26 @@ import Socket
 @objc(TcpSocketPlugin)
 public class TcpSocketPlugin: CAPPlugin {
     var clients: [Socket] = []
-    
+    var servers: [Socket] = []
+
+    /// Guards `clients`: with a listening socket the array is also appended to
+    /// from the accept loop, while JS keeps calling send/read on the main thread.
+    private let clientsLock = NSLock()
+
+    /// Appends a client and returns its id, which is its index in the pool.
+    private func addClient(_ client: Socket) -> Int {
+        clientsLock.lock()
+        defer { clientsLock.unlock() }
+        clients.append(client)
+        return clients.count - 1
+    }
+
+    private func client(at index: Int) -> Socket? {
+        clientsLock.lock()
+        defer { clientsLock.unlock() }
+        return clients[safe: index]
+    }
+
     @objc func connect(_ call: CAPPluginCall) {
         guard let ip = call.getString("ipAddress") else {
             call.reject("Must provide ip address to connect")
@@ -21,8 +40,7 @@ public class TcpSocketPlugin: CAPPlugin {
         do {
             let client = try Socket.create()
             try client.connect(to: ip, port: port, timeout: timeout)
-            clients.append(client)
-            call.resolve(["client": clients.count - 1])
+            call.resolve(["client": addClient(client)])
         } catch {
             call.reject(error.localizedDescription)
         }
@@ -35,7 +53,7 @@ public class TcpSocketPlugin: CAPPlugin {
             return
         }
         
-        guard let client = clients[safe: clientIndex] else {
+        guard let client = client(at: clientIndex) else {
             call.reject("Invalid client index")
             return
         }
@@ -67,7 +85,7 @@ public class TcpSocketPlugin: CAPPlugin {
             return
         }
         
-        guard let client = clients[safe: clientIndex] else {
+        guard let client = client(at: clientIndex) else {
             call.reject("Invalid client index")
             return
         }
@@ -97,10 +115,60 @@ public class TcpSocketPlugin: CAPPlugin {
             return
         }
         
-        if let client = clients[safe: clientIndex] {
+        if let client = client(at: clientIndex) {
             client.close()
         }
         call.resolve(["client": clientIndex])
+    }
+
+    @objc func listen(_ call: CAPPluginCall) {
+        let port = call.getInt("port", 9100)
+
+        do {
+            let server = try Socket.create()
+            try server.listen(on: port)
+            servers.append(server)
+            let serverIndex = servers.count - 1
+
+            // acceptClientConnection() blocks until a peer arrives, so the loop
+            // cannot run on the thread serving JS calls.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                while true {
+                    guard let self = self else { return }
+                    guard let accepted = try? server.acceptClientConnection() else {
+                        // listen socket closed by stopListening, or accept failed
+                        return
+                    }
+                    let clientIndex = self.addClient(accepted)
+                    self.notifyListeners("connection", data: [
+                        "server": serverIndex,
+                        "client": clientIndex,
+                        "address": accepted.remoteHostname
+                    ])
+                }
+            }
+            call.resolve(["server": serverIndex])
+        } catch {
+            call.reject(error.localizedDescription)
+        }
+    }
+
+    @objc func stopListening(_ call: CAPPluginCall) {
+        let serverIndex = call.getInt("server", -1)
+        if (serverIndex == -1) {
+            call.reject("No server specified")
+            return
+        }
+
+        guard let server = servers[safe: serverIndex] else {
+            call.reject("Invalid server index")
+            return
+        }
+
+        // Closing the socket is what ends the accept loop: it makes the pending
+        // acceptClientConnection() fail, and the loop returns.
+        server.close()
+        call.resolve()
     }
 }
 
