@@ -12,6 +12,7 @@ import type {
   SendOptions,
   StopListeningOptions,
   TcpSocketPlugin,
+  LocalAddressResult,
 } from './definitions';
 
 export class TcpSocketWeb extends WebPlugin implements TcpSocketPlugin {
@@ -40,5 +41,10 @@ export class TcpSocketWeb extends WebPlugin implements TcpSocketPlugin {
   stopListening(options: StopListeningOptions): Promise<void> {
     console.log('stopListening', options);
     throw new Error('Method not implemented.');
+  }
+
+  async getLocalAddress(): Promise<LocalAddressResult> {
+    // A browser cannot see its own LAN address; callers fall back to a manually entered one.
+    return {};
   }
 }

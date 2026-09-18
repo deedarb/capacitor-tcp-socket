@@ -217,6 +217,51 @@ public class TcpSocketPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /**
+     * Address of this device in the local network: Wi-Fi (wlan0) first, IPv4 first. Peers reach the
+     * device at this address without internet; the app sends it with heartbeats.
+     */
+    @PluginMethod()
+    public void getLocalAddress(PluginCall call) {
+        String bestIp = null;
+        String bestName = null;
+        int bestScore = -1;
+        try {
+            for (NetworkInterface iface : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!iface.isUp() || iface.isLoopback()) {
+                    continue;
+                }
+                String name = iface.getName();
+                // Cellular (rmnet*) is useless to peers; Wi-Fi first, then ethernet/others.
+                if (name.startsWith("rmnet") || name.startsWith("dummy")) {
+                    continue;
+                }
+                for (InetAddress address : Collections.list(iface.getInetAddresses())) {
+                    if (address.isLoopbackAddress() || address.isLinkLocalAddress()) {
+                        continue;
+                    }
+                    int score = (name.startsWith("wlan") ? 4 : 0) + (address instanceof Inet4Address ? 2 : 0) + (name.startsWith("eth") ? 1 : 0);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        String ip = address.getHostAddress();
+                        int zone = ip == null ? -1 : ip.indexOf('%');
+                        bestIp = zone >= 0 ? ip.substring(0, zone) : ip;
+                        bestName = name;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            call.resolve(new JSObject());
+            return;
+        }
+        JSObject result = new JSObject();
+        if (bestIp != null) {
+            result.put("ip", bestIp);
+            result.put("interfaceName", bestName);
+        }
+        call.resolve(result);
+    }
+
     @PluginMethod()
     public void stopListening(PluginCall call) {
         final Integer server = call.getInt("server", -1);

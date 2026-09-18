@@ -153,6 +153,49 @@ public class TcpSocketPlugin: CAPPlugin {
         }
     }
 
+    /// Address of this device in the local network: the Wi-Fi interface (en0) first, IPv4 first.
+    /// Peers reach the device at this address without internet; the app sends it with heartbeats.
+    @objc func getLocalAddress(_ call: CAPPluginCall) {
+        var candidates: [(name: String, ip: String, isV4: Bool)] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else {
+            call.resolve([:])
+            return
+        }
+        defer { freeifaddrs(ifaddr) }
+        var pointer: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = pointer {
+            defer { pointer = current.pointee.ifa_next }
+            guard let addr = current.pointee.ifa_addr else { continue }
+            let family = addr.pointee.sa_family
+            guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
+            let flags = Int32(current.pointee.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+            let name = String(cString: current.pointee.ifa_name)
+            // Wi-Fi is en0; other en*/bridge interfaces come next, cellular (pdp_ip*) is useless to peers.
+            guard name.hasPrefix("en") || name.hasPrefix("bridge") else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                var ip = String(cString: host)
+                if let zone = ip.firstIndex(of: "%") { ip = String(ip[..<zone]) }
+                let isV4 = family == UInt8(AF_INET)
+                if !isV4 && ip.hasPrefix("fe80") { continue }
+                candidates.append((name: name, ip: ip, isV4: isV4))
+            }
+        }
+        let best = candidates.sorted { left, right in
+            if left.name == "en0" && right.name != "en0" { return true }
+            if left.name != "en0" && right.name == "en0" { return false }
+            if left.isV4 != right.isV4 { return left.isV4 }
+            return left.name < right.name
+        }.first
+        guard let found = best else {
+            call.resolve([:])
+            return
+        }
+        call.resolve(["ip": found.ip, "interfaceName": found.name])
+    }
+
     @objc func stopListening(_ call: CAPPluginCall) {
         let serverIndex = call.getInt("server", -1)
         if (serverIndex == -1) {

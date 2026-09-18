@@ -8,4 +8,7 @@ CAP_PLUGIN(TcpSocketPlugin, "TcpSocket",
            CAP_PLUGIN_METHOD(send, CAPPluginReturnPromise);
            CAP_PLUGIN_METHOD(read, CAPPluginReturnPromise);
            CAP_PLUGIN_METHOD(disconnect, CAPPluginReturnPromise);
+           CAP_PLUGIN_METHOD(listen, CAPPluginReturnPromise);
+           CAP_PLUGIN_METHOD(stopListening, CAPPluginReturnPromise);
+           CAP_PLUGIN_METHOD(getLocalAddress, CAPPluginReturnPromise);
 )
