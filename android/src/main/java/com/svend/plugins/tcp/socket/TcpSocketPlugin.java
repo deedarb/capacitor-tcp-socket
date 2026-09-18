@@ -14,10 +14,15 @@ import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.NetworkInterface;
+import java.net.InetAddress;
+import java.net.Inet4Address;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.SocketTimeoutException;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
@@ -111,6 +116,7 @@ public class TcpSocketPlugin extends Plugin {
     public void read(final PluginCall call) {
         final Integer client = call.getInt("client", -1);
         final Integer length = call.getInt("expectLen", 1024);
+        final Integer timeout = call.getInt("timeout", 10);
 
         if (client == -1 || length == -1) {
             call.reject("Client or length not specified");
@@ -119,20 +125,21 @@ public class TcpSocketPlugin extends Plugin {
 
         Runnable runnable = () -> {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    final Socket socket = clients.get(client);
-                    DataInputStream mBufferIn = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-                    byte[] bytes = new byte[length];
-                    int read = mBufferIn.read(bytes, 0, length);
-                    Base64.getEncoder().encodeToString(bytes);
-                    JSObject ret = new JSObject();
-                    ret.put("result", new String(bytes, 0, read));
-                    call.resolve(ret);
-                } else {
-                    JSObject ret = new JSObject();
-                    ret.put("result", "");
-                    call.resolve(ret);
-                }
+                final Socket socket = clients.get(client);
+                // One recv straight from the socket, no BufferedInputStream: a buffer created per
+                // call could swallow bytes past `length` and lose them for the next read.
+                socket.setSoTimeout(timeout * 1000);
+                byte[] bytes = new byte[length];
+                int read = socket.getInputStream().read(bytes, 0, length);
+                JSObject ret = new JSObject();
+                // Raw bytes as base64, same as iOS; "" on remote close (-1) — the caller stops reading.
+                ret.put("result", read > 0 ? Base64.getEncoder().encodeToString(Arrays.copyOf(bytes, read)) : "");
+                call.resolve(ret);
+            } catch (SocketTimeoutException e) {
+                // Peer connected and went silent: not an error for the caller, just nothing to read.
+                JSObject ret = new JSObject();
+                ret.put("result", "");
+                call.resolve(ret);
             } catch (IOException e) {
                 call.reject(e.getMessage());
             }

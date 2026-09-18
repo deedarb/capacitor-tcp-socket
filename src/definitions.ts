@@ -72,6 +72,10 @@ export interface ReadOptions {
 }
 
 export interface ReadResult {
+  /**
+   * Bytes received, base64-encoded (one recv: whatever the socket had, at most `expectLen`).
+   * Empty when the peer closed the connection or nothing arrived within `timeout`.
+   */
   result?: string;
 }
 

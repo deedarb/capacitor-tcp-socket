@@ -84,30 +84,49 @@ public class TcpSocketPlugin: CAPPlugin {
             call.reject("No client specified")
             return
         }
-        
+
         guard let client = client(at: clientIndex) else {
             call.reject("Invalid client index")
             return
         }
-        
+
         let expectLen = call.getInt("expectLen", 1024)
         let timeout = call.getInt("timeout", 10)
-        
-        var buffer = Data(capacity: expectLen)
-        do {
-            let bytesRead = try client.read(into: &buffer)
-            if bytesRead > 0 {
-                // Return the raw data as base64 string
-                let base64String = buffer.base64EncodedString()
-                call.resolve(["result": base64String])
-            } else {
+
+        // The bridge serves every plugin call from one serial queue: a read that blocks here
+        // would stall all other plugin calls (printing included) until data arrives. Wait for
+        // readability off that queue, and give up after `timeout` instead of hanging forever
+        // on a peer that connected and went silent.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                // Not BlueSocket's isReadableOrWritable: it selects on read AND write, and a freshly
+                // accepted socket is always writable, so it returns at once with nothing to read.
+                if !TcpSocketPlugin.waitReadable(client, timeoutMs: timeout * 1000) {
+                    call.resolve(["result": ""])
+                    return
+                }
+                var buffer = Data(capacity: expectLen)
+                // Returns what the socket has right now (at least one recv), 0 on remote close.
+                let bytesRead = try client.read(into: &buffer)
+                if bytesRead > 0 {
+                    // Raw bytes as base64: the caller decides how to decode them.
+                    call.resolve(["result": buffer.base64EncodedString()])
+                } else {
+                    call.resolve(["result": ""])
+                }
+            } catch {
                 call.resolve(["result": ""])
             }
-        } catch {
-            call.resolve(["result": ""])
         }
     }
-    
+
+    /// Blocks until the socket has data (or the peer hung up), at most `timeoutMs`.
+    private static func waitReadable(_ socket: Socket, timeoutMs: Int) -> Bool {
+        var pfd = pollfd(fd: socket.socketfd, events: Int16(POLLIN), revents: 0)
+        let ready = poll(&pfd, 1, Int32(timeoutMs))
+        return ready > 0 && (Int32(pfd.revents) & (POLLIN | POLLHUP)) != 0
+    }
+
     @objc func disconnect(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
         if (clientIndex == -1) {
