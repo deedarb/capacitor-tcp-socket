@@ -68,6 +68,7 @@ Keep the app in the foreground while it needs to serve peers.
 * [`disconnect(...)`](#disconnect)
 * [`listen(...)`](#listen)
 * [`stopListening(...)`](#stoplistening)
+* [`getLocalAddress()`](#getlocaladdress)
 * [`addListener('connection', ...)`](#addlistenerconnection-)
 * [`addListener('disconnection', ...)`](#addlistenerdisconnection-)
 * [Interfaces](#interfaces)
@@ -174,6 +175,22 @@ Stop accepting connections. Clients already accepted stay open.
 --------------------
 
 
+### getLocalAddress()
+
+```typescript
+getLocalAddress() => Promise<LocalAddressResult>
+```
+
+Address of this device in the local network — the one peers can reach it at.
+
+Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android) and IPv4. `ip` is undefined when
+the device has no local-network address (airplane mode, cellular only).
+
+**Returns:** <code>Promise&lt;<a href="#localaddressresult">LocalAddressResult</a>&gt;</code>
+
+--------------------
+
+
 ### addListener('connection', ...)
 
 ```typescript
@@ -239,9 +256,9 @@ A peer closed the connection, or it dropped.
 
 #### ReadResult
 
-| Prop         | Type                |
-| ------------ | ------------------- |
-| **`result`** | <code>string</code> |
+| Prop         | Type                | Description                                                                                                                                                             |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`result`** | <code>string</code> | Bytes received, base64-encoded (one recv: whatever the socket had, at most `expectLen`). Empty when the peer closed the connection or nothing arrived within `timeout`. |
 
 
 #### ReadOptions
@@ -286,6 +303,14 @@ A peer closed the connection, or it dropped.
 | Prop         | Type                |
 | ------------ | ------------------- |
 | **`server`** | <code>number</code> |
+
+
+#### LocalAddressResult
+
+| Prop                | Type                | Description                                                            |
+| ------------------- | ------------------- | ---------------------------------------------------------------------- |
+| **`ip`**            | <code>string</code> | IPv4 (or IPv6 if that is all there is) of the local-network interface. |
+| **`interfaceName`** | <code>string</code> | Interface the address belongs to, e.g. `en0` / `wlan0`.                |
 
 
 #### PluginListenerHandle

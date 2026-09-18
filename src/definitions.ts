@@ -21,6 +21,14 @@ export interface TcpSocketPlugin {
   /** Stop accepting connections. Clients already accepted stay open. */
   stopListening(options: StopListeningOptions): Promise<void>;
 
+  /**
+   * Address of this device in the local network — the one peers can reach it at.
+   *
+   * Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android) and IPv4. `ip` is undefined when
+   * the device has no local-network address (airplane mode, cellular only).
+   */
+  getLocalAddress(): Promise<LocalAddressResult>;
+
   /** A peer connected to a listening socket. */
   addListener(eventName: 'connection', listenerFunc: (event: ConnectionEvent) => void): Promise<PluginListenerHandle>;
 
@@ -104,4 +112,11 @@ export interface ConnectionEvent {
 
 export interface DisconnectionEvent {
   client: number;
+}
+
+export interface LocalAddressResult {
+  /** IPv4 (or IPv6 if that is all there is) of the local-network interface. */
+  ip?: string;
+  /** Interface the address belongs to, e.g. `en0` / `wlan0`. */
+  interfaceName?: string;
 }
