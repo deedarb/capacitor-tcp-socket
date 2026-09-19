@@ -13,6 +13,10 @@ export interface TcpSocketPlugin {
    * so `send`, `read` and `disconnect` work with them unchanged — the `client`
    * handed out by the `connection` event is an ordinary client id.
    *
+   * Subscribe to `connection` before calling `listen`. A peer that connects before the
+   * first listener is attached is not lost — its event is retained and delivered to
+   * that listener — but there is no reason to rely on it.
+   *
    * On iOS the app must declare `NSLocalNetworkUsageDescription` in Info.plist,
    * otherwise iOS 14+ silently blocks local network access.
    */
@@ -32,7 +36,14 @@ export interface TcpSocketPlugin {
   /** A peer connected to a listening socket. */
   addListener(eventName: 'connection', listenerFunc: (event: ConnectionEvent) => void): Promise<PluginListenerHandle>;
 
-  /** A peer closed the connection, or it dropped. */
+  /**
+   * The peer closed the connection, or it dropped.
+   *
+   * Detected on the next `read` / `send` on that client — there is no background watchdog, so a
+   * client nobody reads from or writes to reports nothing. Fired once per client; after it every
+   * `read` / `send` on that client rejects with `Socket closed`. A local `disconnect` does not
+   * fire it.
+   */
   addListener(
     eventName: 'disconnection',
     listenerFunc: (event: DisconnectionEvent) => void,
@@ -62,9 +73,10 @@ export interface SendOptions {
 
 export interface ReadOptions {
   client: number;
+  /** Upper bound for one read, in bytes. */
   expectLen: number;
   /**
-   * timeout in seconds.
+   * timeout in seconds; 0 returns at once with whatever is already there.
    *
    * default: 10
    */
@@ -74,7 +86,10 @@ export interface ReadOptions {
 export interface ReadResult {
   /**
    * Bytes received, base64-encoded (one recv: whatever the socket had, at most `expectLen`).
-   * Empty when the peer closed the connection or nothing arrived within `timeout`.
+   *
+   * Empty when nothing arrived within `timeout`, and — once — when the peer closed the
+   * connection; that close also fires `disconnection`, and every later `read` on the client
+   * rejects with `Socket closed`. Other I/O errors reject.
    */
   result?: string;
 }
@@ -115,6 +130,7 @@ export interface ConnectionEvent {
 }
 
 export interface DisconnectionEvent {
+  /** Client whose peer is gone; the socket is already closed. */
   client: number;
 }
 

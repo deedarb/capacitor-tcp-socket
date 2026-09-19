@@ -27,12 +27,15 @@ server in between.
 ```ts
 import { TcpSocket } from '@deedarb/capacitor-tcp-socket';
 
-// device A — listen
-const { server } = await TcpSocket.listen({ port: 9100 });
+// device A — subscribe first, then listen
 await TcpSocket.addListener('connection', async ({ client, address }) => {
   console.log('peer connected', address);
   await TcpSocket.send({ client, data: btoa('hello') });
 });
+await TcpSocket.addListener('disconnection', ({ client }) => {
+  console.log('peer gone', client);
+});
+const { server } = await TcpSocket.listen({ port: 9100 });
 
 // device B — connect as usual
 const { client } = await TcpSocket.connect({ ipAddress: '192.168.1.42', port: 9100 });
@@ -42,6 +45,15 @@ Accepted connections join the same pool as `connect`, so `send`, `read` and
 `disconnect` take the `client` from the `connection` event unchanged.
 
 `stopListening({ server })` stops accepting; clients already accepted stay open.
+
+### Reading
+
+`read` returns one recv of at most `expectLen` bytes, base64-encoded, on both
+platforms. `result` is `''` when nothing arrived within `timeout`, and once more
+when the peer closed the connection — that close also fires `disconnection`,
+and from then on `read` / `send` on that client reject with `Socket closed`,
+so a read loop stops instead of spinning. A peer that drops is noticed on the
+next `read` / `send`; nobody watches idle clients in the background.
 
 ### iOS: local network permission
 
@@ -148,6 +160,10 @@ Accepted connections join the same pool as {@link TcpSocketPlugin.connect},
 so `send`, `read` and `disconnect` work with them unchanged — the `client`
 handed out by the `connection` event is an ordinary client id.
 
+Subscribe to `connection` before calling `listen`. A peer that connects before the
+first listener is attached is not lost — its event is retained and delivered to
+that listener — but there is no reason to rely on it.
+
 On iOS the app must declare `NSLocalNetworkUsageDescription` in Info.plist,
 otherwise iOS 14+ silently blocks local network access.
 
@@ -215,7 +231,12 @@ A peer connected to a listening socket.
 addListener(eventName: 'disconnection', listenerFunc: (event: DisconnectionEvent) => void) => Promise<PluginListenerHandle>
 ```
 
-A peer closed the connection, or it dropped.
+The peer closed the connection, or it dropped.
+
+Detected on the next `read` / `send` on that client — there is no background watchdog, so a
+client nobody reads from or writes to reports nothing. Fired once per client; after it every
+`read` / `send` on that client rejects with `Socket closed`. A local `disconnect` does not
+fire it.
 
 | Param              | Type                                                                                  |
 | ------------------ | ------------------------------------------------------------------------------------- |
@@ -256,18 +277,18 @@ A peer closed the connection, or it dropped.
 
 #### ReadResult
 
-| Prop         | Type                | Description                                                                                                                                                             |
-| ------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`result`** | <code>string</code> | Bytes received, base64-encoded (one recv: whatever the socket had, at most `expectLen`). Empty when the peer closed the connection or nothing arrived within `timeout`. |
+| Prop         | Type                | Description                                                                                                                                                                                                                                                                                                                |
+| ------------ | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`result`** | <code>string</code> | Bytes received, base64-encoded (one recv: whatever the socket had, at most `expectLen`). Empty when nothing arrived within `timeout`, and — once — when the peer closed the connection; that close also fires `disconnection`, and every later `read` on the client rejects with `Socket closed`. Other I/O errors reject. |
 
 
 #### ReadOptions
 
-| Prop            | Type                | Description                     |
-| --------------- | ------------------- | ------------------------------- |
-| **`client`**    | <code>number</code> |                                 |
-| **`expectLen`** | <code>number</code> |                                 |
-| **`timeout`**   | <code>number</code> | timeout in seconds. default: 10 |
+| Prop            | Type                | Description                                                                       |
+| --------------- | ------------------- | --------------------------------------------------------------------------------- |
+| **`client`**    | <code>number</code> |                                                                                   |
+| **`expectLen`** | <code>number</code> | Upper bound for one read, in bytes.                                               |
+| **`timeout`**   | <code>number</code> | timeout in seconds; 0 returns at once with whatever is already there. default: 10 |
 
 
 #### DisconnectResult
@@ -331,8 +352,8 @@ A peer closed the connection, or it dropped.
 
 #### DisconnectionEvent
 
-| Prop         | Type                |
-| ------------ | ------------------- |
-| **`client`** | <code>number</code> |
+| Prop         | Type                | Description                                              |
+| ------------ | ------------------- | -------------------------------------------------------- |
+| **`client`** | <code>number</code> | Client whose peer is gone; the socket is already closed. |
 
 </docgen-api>

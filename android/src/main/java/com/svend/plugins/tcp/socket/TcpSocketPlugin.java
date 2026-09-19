@@ -1,7 +1,7 @@
 package com.svend.plugins.tcp.socket;
 
 import android.Manifest;
-import android.os.Build;
+import android.util.Base64;
 import android.util.Log;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -9,21 +9,16 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.NetworkInterface;
-import java.net.InetAddress;
+import java.io.OutputStream;
 import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
-import java.net.SocketTimeoutException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 
@@ -33,14 +28,84 @@ import java.util.List;
 )
 public class TcpSocketPlugin extends Plugin {
 
-    private Socket socket;
-    private DataOutputStream mBufferOut;
+    /** A pooled connection: one from connect() or one accepted by a listening socket. */
+    private static final class Client {
+
+        final Socket socket;
+        /**
+         * Serialises reads on this socket: two concurrent reads would split one message
+         * between them. Never held while closing, so a blocked read cannot deadlock a close.
+         */
+        final Object readLock = new Object();
+
+        Client(Socket socket) {
+            this.socket = socket;
+        }
+    }
+
     /**
-     * Synchronized: with a listening socket this list is also appended to from
-     * the accept thread, while JS keeps calling send/read on the main thread.
+     * Client ids are indexes into this pool. The accept thread appends while JS keeps
+     * calling send/read, and a closed client keeps its slot so ids stay stable. Every
+     * compound access (add + index, bounds check + get) happens under the list's lock —
+     * a synchronizedList would only make the single operations atomic.
      */
-    private final List<Socket> clients = Collections.synchronizedList(new ArrayList<>());
-    private final List<ServerSocket> servers = Collections.synchronizedList(new ArrayList<>());
+    private final List<Client> clients = new ArrayList<>();
+    private final List<ServerSocket> servers = new ArrayList<>();
+
+    private int addClient(Socket socket) {
+        synchronized (clients) {
+            clients.add(new Client(socket));
+            return clients.size() - 1;
+        }
+    }
+
+    private Client clientAt(int index) {
+        synchronized (clients) {
+            return index >= 0 && index < clients.size() ? clients.get(index) : null;
+        }
+    }
+
+    private int addServer(ServerSocket server) {
+        synchronized (servers) {
+            servers.add(server);
+            return servers.size() - 1;
+        }
+    }
+
+    private ServerSocket serverAt(int index) {
+        synchronized (servers) {
+            return index >= 0 && index < servers.size() ? servers.get(index) : null;
+        }
+    }
+
+    /**
+     * Closes the client and tells JS the peer is gone — once: only the close that actually
+     * closes the socket emits the event, and a local disconnect() is not a peer event.
+     */
+    private void peerGone(int clientIndex, Client client) {
+        boolean wasOpen;
+        synchronized (client) {
+            wasOpen = !client.socket.isClosed();
+            if (wasOpen) {
+                try {
+                    client.socket.close();
+                } catch (IOException ignored) {
+                    // the socket is unusable either way
+                }
+            }
+        }
+        if (wasOpen) {
+            JSObject event = new JSObject();
+            event.put("client", clientIndex);
+            notifyListeners("disconnection", event);
+        }
+    }
+
+    private static void resolveResult(PluginCall call, String result) {
+        JSObject ret = new JSObject();
+        ret.put("result", result);
+        call.resolve(ret);
+    }
 
     @PluginMethod()
     public void connect(PluginCall call) {
@@ -50,145 +115,152 @@ public class TcpSocketPlugin extends Plugin {
             call.reject("Must provide ip address to connect");
             return;
         }
-        Integer port = call.getInt("port", 9100);
-        Integer timeout = call.getInt("timeout", 10); // Default 10 second timeout (in seconds)
+        int port = call.getInt("port", 9100);
+        int timeout = call.getInt("timeout", 10); // seconds
 
+        Socket socket = new Socket();
         try {
-            if (socket != null && socket.isConnected()) {
-                socket.close();
-            }
-            socket = new Socket();
-            socket.connect(new InetSocketAddress(ipAddress, port), timeout * 1000); // Convert seconds to milliseconds
-            clients.add(socket);
+            socket.connect(new InetSocketAddress(ipAddress, port), timeout * 1000);
         } catch (IOException e) {
-            Log.d("Connection failed", e.getMessage());
+            Log.d("Connection failed", String.valueOf(e.getMessage()));
             call.reject(e.getMessage());
             return;
         }
 
         JSObject ret = new JSObject();
-        ret.put("client", clients.size() - 1);
+        ret.put("client", addClient(socket));
         call.resolve(ret);
     }
 
     @PluginMethod()
     public void send(final PluginCall call) {
-        final Integer client = call.getInt("client", -1);
+        final int clientIndex = call.getInt("client", -1);
         final String msg = call.getString("data", "");
 
-        if (client == -1) {
+        if (clientIndex == -1) {
             call.reject("No client specified");
             return;
         }
-
-        Runnable runnable = () -> {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    final Socket socket = clients.get(client);
-                    mBufferOut = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
-                    byte[] decoded = Base64.getDecoder().decode(msg);
-                    if (mBufferOut != null) {
-                        mBufferOut.write(decoded);
-                        mBufferOut.flush();
-                    }
-                }
-                call.resolve();
-            } catch (IOException e) {
-                call.reject(e.getMessage());
-            }
-        };
-
-        Socket socket = clients.get(client);
-        if (!socket.isConnected()) {
-            try {
-                socket.close();
-            } catch (IOException e) {
-                call.reject("Generic error");
-            }
-            call.reject("Socket not connected");
+        final Client client = clientAt(clientIndex);
+        if (client == null) {
+            call.reject("Invalid client index");
             return;
         }
-        Thread thread = new Thread(runnable);
-        thread.start();
+        if (client.socket.isClosed()) {
+            call.reject("Socket closed");
+            return;
+        }
+        final byte[] decoded;
+        try {
+            decoded = Base64.decode(msg, Base64.DEFAULT);
+        } catch (IllegalArgumentException e) {
+            call.reject("Invalid base64 data");
+            return;
+        }
+
+        // write() blocks when the peer stops reading, so it runs off the thread serving JS calls.
+        new Thread(() -> {
+            try {
+                OutputStream out = client.socket.getOutputStream();
+                out.write(decoded);
+                out.flush();
+                call.resolve();
+            } catch (IOException e) {
+                if (client.socket.isClosed()) {
+                    call.reject("Socket closed");
+                } else {
+                    // Broken pipe / connection reset: the peer is gone.
+                    peerGone(clientIndex, client);
+                    call.reject(e.getMessage());
+                }
+            }
+        }).start();
     }
 
     @PluginMethod()
     public void read(final PluginCall call) {
-        final Integer client = call.getInt("client", -1);
-        final Integer length = call.getInt("expectLen", 1024);
-        final Integer timeout = call.getInt("timeout", 10);
+        final int clientIndex = call.getInt("client", -1);
+        final int length = call.getInt("expectLen", 1024);
+        final int timeout = Math.max(0, call.getInt("timeout", 10)); // seconds; 0 = only what is already there
 
-        if (client == -1 || length == -1) {
+        if (clientIndex == -1 || length <= 0) {
             call.reject("Client or length not specified");
             return;
         }
-
-        Runnable runnable = () -> {
-            try {
-                final Socket socket = clients.get(client);
-                // One recv straight from the socket, no BufferedInputStream: a buffer created per
-                // call could swallow bytes past `length` and lose them for the next read.
-                socket.setSoTimeout(timeout * 1000);
-                byte[] bytes = new byte[length];
-                int read = socket.getInputStream().read(bytes, 0, length);
-                JSObject ret = new JSObject();
-                // Raw bytes as base64, same as iOS; "" on remote close (-1) — the caller stops reading.
-                ret.put("result", read > 0 ? Base64.getEncoder().encodeToString(Arrays.copyOf(bytes, read)) : "");
-                call.resolve(ret);
-            } catch (SocketTimeoutException e) {
-                // Peer connected and went silent: not an error for the caller, just nothing to read.
-                JSObject ret = new JSObject();
-                ret.put("result", "");
-                call.resolve(ret);
-            } catch (IOException e) {
-                call.reject(e.getMessage());
-            }
-        };
-
-        Socket socket = clients.get(client);
-        if (!socket.isConnected()) {
-            try {
-                socket.close();
-            } catch (IOException e) {
-                call.reject("Generic error");
-            }
-            call.reject("Socket not connected");
+        final Client client = clientAt(clientIndex);
+        if (client == null) {
+            call.reject("Invalid client index");
             return;
         }
-        Thread thread = new Thread(runnable);
-        thread.start();
+        if (client.socket.isClosed()) {
+            call.reject("Socket closed");
+            return;
+        }
+
+        // The read blocks up to `timeout`, so it runs off the thread serving JS calls.
+        new Thread(() -> {
+            try {
+                synchronized (client.readLock) {
+                    // One recv straight from the socket, no BufferedInputStream: a buffer created per
+                    // call could swallow bytes past `length` and lose them for the next read.
+                    client.socket.setSoTimeout(timeout * 1000);
+                    byte[] bytes = new byte[length];
+                    int read = client.socket.getInputStream().read(bytes, 0, length);
+                    if (read > 0) {
+                        // Raw bytes as base64, same as iOS. NO_WRAP: iOS does not insert line breaks either.
+                        resolveResult(call, Base64.encodeToString(bytes, 0, read, Base64.NO_WRAP));
+                        return;
+                    }
+                }
+                // End of stream: the peer closed. Report it once; further reads are rejected.
+                peerGone(clientIndex, client);
+                resolveResult(call, "");
+            } catch (SocketTimeoutException e) {
+                // Peer connected and went silent: not an error for the caller, just nothing to read.
+                resolveResult(call, "");
+            } catch (IOException e) {
+                if (client.socket.isClosed()) {
+                    // disconnect() closed it while we were waiting
+                    call.reject("Socket closed");
+                } else {
+                    peerGone(clientIndex, client);
+                    call.reject(e.getMessage());
+                }
+            }
+        }).start();
     }
 
     @PluginMethod()
     public void disconnect(PluginCall call) {
-        final Integer client = call.getInt("client", -1);
-        if (client == -1) {
+        final int clientIndex = call.getInt("client", -1);
+        if (clientIndex == -1) {
             call.reject("No client specified");
             return;
         }
-        if (clients.isEmpty()) {
-            call.reject("Socket not connected");
+        final Client client = clientAt(clientIndex);
+        if (client == null) {
+            call.reject("Invalid client index");
             return;
         }
-        final Socket socket = clients.get(client);
-        try {
-            if (!socket.isConnected()) {
-                socket.close();
-                call.reject("Socket not connected");
+        synchronized (client) {
+            try {
+                // Idempotent: closing a closed socket is a no-op. A blocked read on this
+                // socket gets "Socket closed" from its own thread.
+                client.socket.close();
+            } catch (IOException e) {
+                call.reject(e.getMessage());
+                return;
             }
-            socket.close();
-        } catch (IOException e) {
-            call.reject(e.getMessage());
         }
 
         JSObject ret = new JSObject();
-        ret.put("client", client);
+        ret.put("client", clientIndex);
         call.resolve(ret);
     }
 
     @PluginMethod()
     public void listen(PluginCall call) {
-        final Integer port = call.getInt("port", 9100);
+        final int port = call.getInt("port", 9100);
 
         final ServerSocket server;
         try {
@@ -197,27 +269,28 @@ public class TcpSocketPlugin extends Plugin {
             call.reject(e.getMessage());
             return;
         }
-        servers.add(server);
-        final int serverIndex = servers.size() - 1;
+        final int serverIndex = addServer(server);
 
         // accept() blocks until a peer arrives, so the loop cannot run on the
         // thread serving JS calls.
         new Thread(() -> {
             while (!server.isClosed()) {
+                final Socket accepted;
                 try {
-                    Socket accepted = server.accept();
-                    clients.add(accepted);
-                    JSObject event = new JSObject();
-                    event.put("server", serverIndex);
-                    event.put("client", clients.size() - 1);
-                    event.put("address", accepted.getInetAddress().getHostAddress());
-                    notifyListeners("connection", event);
+                    accepted = server.accept();
                 } catch (IOException e) {
                     // stopListening closed the socket, or accept failed
                     return;
                 }
+                JSObject event = new JSObject();
+                event.put("server", serverIndex);
+                event.put("client", addClient(accepted));
+                event.put("address", accepted.getInetAddress().getHostAddress());
+                // Retained: a peer may connect before JS has attached its listener,
+                // and the client would otherwise be unreachable from JS.
+                notifyListeners("connection", event, true);
             }
-        }).start();
+        }, "tcp-socket-accept-" + serverIndex).start();
 
         JSObject ret = new JSObject();
         ret.put("server", serverIndex);
@@ -239,15 +312,16 @@ public class TcpSocketPlugin extends Plugin {
                     continue;
                 }
                 String name = iface.getName();
-                // Cellular (rmnet*) is useless to peers; Wi-Fi first, then ethernet/others.
-                if (name.startsWith("rmnet") || name.startsWith("dummy")) {
+                // Cellular (rmnet*) and VPN tunnels (tun*, ppp*) are useless to LAN peers.
+                if (name.startsWith("rmnet") || name.startsWith("dummy") || name.startsWith("tun") || name.startsWith("ppp")) {
                     continue;
                 }
                 for (InetAddress address : Collections.list(iface.getInetAddresses())) {
                     if (address.isLoopbackAddress() || address.isLinkLocalAddress()) {
                         continue;
                     }
-                    int score = (name.startsWith("wlan") ? 4 : 0) + (address instanceof Inet4Address ? 2 : 0) + (name.startsWith("eth") ? 1 : 0);
+                    int score =
+                        (name.startsWith("wlan") ? 4 : 0) + (address instanceof Inet4Address ? 2 : 0) + (name.startsWith("eth") ? 1 : 0);
                     if (score > bestScore) {
                         bestScore = score;
                         String ip = address.getHostAddress();
@@ -271,12 +345,13 @@ public class TcpSocketPlugin extends Plugin {
 
     @PluginMethod()
     public void stopListening(PluginCall call) {
-        final Integer server = call.getInt("server", -1);
-        if (server == -1) {
+        final int serverIndex = call.getInt("server", -1);
+        if (serverIndex == -1) {
             call.reject("No server specified");
             return;
         }
-        if (server < 0 || server >= servers.size()) {
+        final ServerSocket server = serverAt(serverIndex);
+        if (server == null) {
             call.reject("Invalid server index");
             return;
         }
@@ -284,7 +359,7 @@ public class TcpSocketPlugin extends Plugin {
         try {
             // Closing the socket is what ends the accept loop: it makes the
             // pending accept() throw, and the thread returns.
-            servers.get(server).close();
+            server.close();
         } catch (IOException e) {
             call.reject(e.getMessage());
             return;
