@@ -13,9 +13,10 @@ export interface TcpSocketPlugin {
    * so `send`, `read` and `disconnect` work with them unchanged — the `client`
    * handed out by the `connection` event is an ordinary client id.
    *
-   * Subscribe to `connection` before calling `listen`. A peer that connects before the
-   * first listener is attached is not lost — its event is retained and delivered to
-   * that listener — but there is no reason to rely on it.
+   * Subscribe to `connection` before calling `listen`. On iOS and Android a peer that
+   * connects before the first listener is attached is not lost — its event is retained
+   * and delivered to that listener. On Electron it is not: the event is dropped, so
+   * attaching the listener first is the only way to see that peer.
    *
    * On iOS the app must declare `NSLocalNetworkUsageDescription` in Info.plist,
    * otherwise iOS 14+ silently blocks local network access.
@@ -28,8 +29,10 @@ export interface TcpSocketPlugin {
   /**
    * Address of this device in the local network — the one peers can reach it at.
    *
-   * Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android) and IPv4. `ip` is undefined when
-   * the device has no local-network address (airplane mode, cellular only).
+   * Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android, `Wi-Fi` / `wlan*` / `en0`
+   * on Electron) and IPv4; virtual adapters (Hyper-V, WSL, VPN, VM bridges) are skipped.
+   * `ip` is undefined when the device has no local-network address (airplane mode,
+   * cellular only).
    */
   getLocalAddress(): Promise<LocalAddressResult>;
 

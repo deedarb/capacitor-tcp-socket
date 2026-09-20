@@ -11,12 +11,19 @@ npm install @deedarb/capacitor-tcp-socket
 npx cap sync
 ```
 
+On Electron the platform has to be synced by its full package name — see
+[Electron](#electron-windows-macos-linux):
+
+```bash
+npx cap sync @capawesome/capacitor-electron
+```
+
 ## Version compatibility
 
-| Plugin | Capacitor | iOS   | Android            |
-| ------ | --------- | ----- | ------------------ |
-| 8.x    | 8.x       | 15.0+ | minSdk 24, Java 21 |
-| 7.x    | 7.x       | 14.0+ | minSdk 23, Java 21 |
+| Plugin | Capacitor | iOS   | Android            | Electron                             |
+| ------ | --------- | ----- | ------------------ | ------------------------------------ |
+| 8.x    | 8.x       | 15.0+ | minSdk 24, Java 21 | `@capawesome/capacitor-electron` 0.1+ |
+| 7.x    | 7.x       | 14.0+ | minSdk 23, Java 21 | —                                    |
 
 ## Server mode
 
@@ -69,6 +76,45 @@ there is no error, connections simply never establish. Add to `Info.plist`:
 
 iOS suspends a backgrounded app, and the listening socket stops accepting.
 Keep the app in the foreground while it needs to serve peers.
+
+## Electron (Windows, macOS, Linux)
+
+The desktop implementation runs in the Electron main process on Node's `net`
+module, and speaks the same API as iOS and Android — base64 in, base64 out,
+the same client ids, the same events.
+
+It targets the [`@capawesome/capacitor-electron`](https://github.com/capawesome-team/capacitor-electron)
+platform. The older `@capacitor-community/electron` uses a different plugin
+contract and does not load this implementation.
+
+```bash
+npm install @capawesome/capacitor-electron
+npx cap add @capawesome/capacitor-electron
+cd electron && npm install && cd ..
+npx cap sync @capawesome/capacitor-electron
+```
+
+That is the whole setup: the platform registers the plugin under its native
+path, so `TcpSocket` works in the renderer with no extra wiring. A plain
+`npx cap sync` skips Electron — pass the full package name.
+
+The implementation uses only Node built-ins, so `capacitor-electron vendor`
+has nothing to rebuild when packaging.
+
+Two things behave differently from mobile:
+
+- **`connection` events are not retained.** On iOS and Android an event fired
+  before the first listener is attached is delivered once the listener shows
+  up; the Electron platform drops it. Subscribe before calling `listen` — which
+  is the right order everywhere.
+- **`getLocalAddress` skips virtual adapters.** Hyper-V, WSL, VM bridges, VPN
+  tunnels and Bluetooth are ignored; `Wi-Fi` / `wlan*` / `en0` wins over
+  Ethernet, and IPv4 over IPv6. `interfaceName` is the adapter name the OS
+  reports — on Windows a friendly name such as `Wi-Fi` or `Ethernet`.
+
+On Windows, the first `listen` raises the Windows Defender Firewall prompt;
+without it inbound connections are blocked. In development the prompt names
+Electron, in production the packaged app.
 
 ## API
 
@@ -160,9 +206,10 @@ Accepted connections join the same pool as {@link TcpSocketPlugin.connect},
 so `send`, `read` and `disconnect` work with them unchanged — the `client`
 handed out by the `connection` event is an ordinary client id.
 
-Subscribe to `connection` before calling `listen`. A peer that connects before the
-first listener is attached is not lost — its event is retained and delivered to
-that listener — but there is no reason to rely on it.
+Subscribe to `connection` before calling `listen`. On iOS and Android a peer that
+connects before the first listener is attached is not lost — its event is retained
+and delivered to that listener. On Electron it is not: the event is dropped, so
+attaching the listener first is the only way to see that peer.
 
 On iOS the app must declare `NSLocalNetworkUsageDescription` in Info.plist,
 otherwise iOS 14+ silently blocks local network access.
@@ -199,8 +246,10 @@ getLocalAddress() => Promise<LocalAddressResult>
 
 Address of this device in the local network — the one peers can reach it at.
 
-Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android) and IPv4. `ip` is undefined when
-the device has no local-network address (airplane mode, cellular only).
+Prefers the Wi-Fi interface (`en0` on iOS, `wlan0` on Android, `Wi-Fi` / `wlan*` / `en0`
+on Electron) and IPv4; virtual adapters (Hyper-V, WSL, VPN, VM bridges) are skipped.
+`ip` is undefined when the device has no local-network address (airplane mode,
+cellular only).
 
 **Returns:** <code>Promise&lt;<a href="#localaddressresult">LocalAddressResult</a>&gt;</code>
 
