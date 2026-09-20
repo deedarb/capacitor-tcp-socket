@@ -1,6 +1,6 @@
 {
   "name": "@deedarb/capacitor-tcp-socket",
-  "version": "8.1.0",
+  "version": "8.2.0",
   "description": "A TCP Socket Plugin for capacitor",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
