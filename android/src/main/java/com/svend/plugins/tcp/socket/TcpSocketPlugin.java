@@ -128,13 +128,21 @@ public class TcpSocketPlugin extends Plugin {
         // The bridge drops every event listener when the WebView starts a new page (reload, live
         // update). Sockets the old page opened would outlive it unreachable: their ids are lost,
         // a listening one keeps its port. Close them all with the page that owned them.
-        bridge.addWebViewListener(
-            new WebViewListener() {
-                @Override
-                public void onPageStarted(WebView webView) {
-                    closeAll();
+        //
+        // Registered on the next main-loop turn, not here: Bridge.Builder.create() constructs the
+        // bridge (plugins load inside the constructor) and only then calls setWebViewListeners(),
+        // which replaces the whole list — a listener added in load() is silently dropped
+        // (Capacitor 8.5). listen() also closes its own stale server on the port, in case this
+        // hook is ever lost again.
+        bridge.executeOnMainThread(() ->
+            bridge.addWebViewListener(
+                new WebViewListener() {
+                    @Override
+                    public void onPageStarted(WebView webView) {
+                        closeAll();
+                    }
                 }
-            }
+            )
         );
     }
 
@@ -247,6 +255,20 @@ public class TcpSocketPlugin extends Plugin {
         synchronized (servers) {
             servers.add(server);
             return servers.size() - 1;
+        }
+    }
+
+    private void closeServersOnPort(int port) {
+        synchronized (servers) {
+            for (ServerSocket server : servers) {
+                if (!server.isClosed() && server.getLocalPort() == port) {
+                    try {
+                        server.close();
+                    } catch (IOException ignored) {
+                        // closing is best effort; the bind below reports a real conflict
+                    }
+                }
+            }
         }
     }
 
@@ -527,6 +549,10 @@ public class TcpSocketPlugin extends Plugin {
             return;
         }
 
+        // A server this plugin still holds on the port belongs to a page that is gone (its JS
+        // lost the id) or to a listen() that was never stopped — either way nobody can reach it,
+        // and it would only make this bind fail with EADDRINUSE.
+        closeServersOnPort(port);
         final ServerSocket server;
         try {
             server = new ServerSocket(port);
