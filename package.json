@@ -12,7 +12,8 @@
     "dist/",
     "electron/dist/",
     "ios/Plugin/",
-    "DeedarbCapacitorTcpSocket.podspec"
+    "DeedarbCapacitorTcpSocket.podspec",
+    "Package.swift"
   ],
   "author": "Svend <svend.jin@gmail.com>",
   "license": "MIT",

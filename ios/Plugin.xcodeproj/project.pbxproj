@@ -13,7 +13,6 @@
 		50ADFF97201F53D600D50D53 /* TcpSocketTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50ADFF96201F53D600D50D53 /* TcpSocketTests.swift */; };
 		50ADFF99201F53D600D50D53 /* TcpSocketPlugin.h in Headers */ = {isa = PBXBuildFile; fileRef = 50ADFF8B201F53D600D50D53 /* TcpSocketPlugin.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		50ADFFA42020D75100D50D53 /* Capacitor.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 50ADFFA52020D75100D50D53 /* Capacitor.framework */; };
-		50ADFFA82020EE4F00D50D53 /* TcpSocketPlugin.m in Sources */ = {isa = PBXBuildFile; fileRef = 50ADFFA72020EE4F00D50D53 /* TcpSocketPlugin.m */; };
 		50E1A94820377CB70090CE1A /* TcpSocketPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E1A94720377CB70090CE1A /* TcpSocketPlugin.swift */; };
 /* End PBXBuildFile section */
 
@@ -36,7 +35,6 @@
 		50ADFF96201F53D600D50D53 /* TcpSocketTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TcpSocketTests.swift; sourceTree = "<group>"; };
 		50ADFF98201F53D600D50D53 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50ADFFA52020D75100D50D53 /* Capacitor.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = Capacitor.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		50ADFFA72020EE4F00D50D53 /* TcpSocketPlugin.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TcpSocketPlugin.m; sourceTree = "<group>"; };
 		50E1A94720377CB70090CE1A /* TcpSocketPlugin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TcpSocketPlugin.swift; sourceTree = "<group>"; };
 		5E23F77F099397094342571A /* Pods-Plugin.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Plugin.debug.xcconfig"; path = "Pods/Target Support Files/Pods-Plugin/Pods-Plugin.debug.xcconfig"; sourceTree = "<group>"; };
 		91781294A431A2A7CC6EB714 /* Pods-Plugin.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Plugin.release.xcconfig"; path = "Pods/Target Support Files/Pods-Plugin/Pods-Plugin.release.xcconfig"; sourceTree = "<group>"; };
@@ -92,7 +90,6 @@
 			children = (
 				50E1A94720377CB70090CE1A /* TcpSocketPlugin.swift */,
 				50ADFF8B201F53D600D50D53 /* TcpSocketPlugin.h */,
-				50ADFFA72020EE4F00D50D53 /* TcpSocketPlugin.m */,
 				50ADFF8C201F53D600D50D53 /* Info.plist */,
 			);
 			path = Plugin;
@@ -306,7 +303,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				50E1A94820377CB70090CE1A /* TcpSocketPlugin.swift in Sources */,
-				50ADFFA82020EE4F00D50D53 /* TcpSocketPlugin.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

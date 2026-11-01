@@ -7,7 +7,19 @@ import Socket
  * here: https://capacitorjs.com/docs/plugins/ios
  */
 @objc(TcpSocketPlugin)
-public class TcpSocketPlugin: CAPPlugin {
+public class TcpSocketPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "TcpSocketPlugin"
+    public let jsName = "TcpSocket"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "connect", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "send", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "disconnect", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listen", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopListening", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getLocalAddress", returnType: CAPPluginReturnPromise)
+    ]
+
     /// A pooled connection: one from `connect` or one accepted by a listening socket.
     /// Reads are serialised on `readQueue`: BlueSocket's `Socket` is not thread-safe, and two
     /// concurrent reads would split one message between them. A serial queue per client (not one
