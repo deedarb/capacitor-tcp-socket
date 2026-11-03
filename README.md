@@ -11,6 +11,9 @@ npm install @deedarb/capacitor-tcp-socket
 npx cap sync
 ```
 
+On iOS the plugin supports both Swift Package Manager and CocoaPods. New Capacitor 8 iOS projects use Swift
+Package Manager by default, and `npx cap sync` adds the plugin as the `DeedarbCapacitorTcpSocket` product.
+
 On Electron the platform has to be synced by its full package name — see
 [Electron](#electron-windows-macos-linux):
 
