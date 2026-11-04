@@ -81,6 +81,14 @@ public class TcpSocketPlugin extends Plugin {
     /** Longest timeout in seconds that still fits in connect()'s int milliseconds. */
     private static final int MAX_TIMEOUT_SECONDS = Integer.MAX_VALUE / 1000;
 
+    /** `code` of a rejection, the same on every platform: TcpSocketErrorCode in definitions.ts. */
+    private static final String ERR_INVALID_ARGUMENT = "INVALID_ARGUMENT";
+    private static final String ERR_CLOSED = "CLOSED";
+    private static final String ERR_TIMEOUT = "TIMEOUT";
+    private static final String ERR_CONNECT_FAILED = "CONNECT_FAILED";
+    private static final String ERR_LISTEN_FAILED = "LISTEN_FAILED";
+    private static final String ERR_IO_ERROR = "IO_ERROR";
+
     /**
      * Stand-in for a closed client: its slot keeps answering "Socket closed" (and disconnect
      * stays idempotent) without holding on to the real socket for the rest of the app's life.
@@ -313,14 +321,14 @@ public class TcpSocketPlugin extends Plugin {
         String ipAddress = call.getString("ipAddress");
 
         if (ipAddress == null || ipAddress.isEmpty()) {
-            call.reject("Must provide ip address to connect");
+            call.reject("Must provide ip address to connect", ERR_INVALID_ARGUMENT);
             return;
         }
         final int port = call.getInt("port", 9100);
         // Seconds; 0 = no limit. Clamped so the milliseconds below cannot overflow.
         final int timeout = Math.min(Math.max(0, call.getInt("timeout", 10)), MAX_TIMEOUT_SECONDS);
         if (port < 0 || port > 65535) {
-            call.reject("Port out of range: " + port);
+            call.reject("Port out of range: " + port, ERR_INVALID_ARGUMENT);
             return;
         }
 
@@ -340,7 +348,7 @@ public class TcpSocketPlugin extends Plugin {
                 } catch (IOException ignored) {
                     // nothing was opened that could leak
                 }
-                call.reject(e.getMessage());
+                call.reject(e.getMessage(), ERR_CONNECT_FAILED);
                 return;
             }
 
@@ -350,7 +358,7 @@ public class TcpSocketPlugin extends Plugin {
             }
             if (clientIndex == -1) {
                 // The page reloaded while connecting: nobody is left to use this socket.
-                call.reject("Socket closed");
+                call.reject("Socket closed", ERR_CLOSED);
                 return;
             }
             JSObject ret = new JSObject();
@@ -366,23 +374,23 @@ public class TcpSocketPlugin extends Plugin {
         final int timeout = Math.max(0, call.getInt("timeout", 0)); // seconds; 0 = no limit
 
         if (clientIndex == -1) {
-            call.reject("No client specified");
+            call.reject("No client specified", ERR_INVALID_ARGUMENT);
             return;
         }
         final Client client = clientAt(clientIndex);
         if (client == null) {
-            call.reject("Invalid client index");
+            call.reject("Invalid client index", ERR_INVALID_ARGUMENT);
             return;
         }
         if (client.socket.isClosed()) {
-            call.reject("Socket closed");
+            call.reject("Socket closed", ERR_CLOSED);
             return;
         }
         final byte[] decoded;
         try {
             decoded = Base64.decode(msg, Base64.DEFAULT);
         } catch (IllegalArgumentException e) {
-            call.reject("Invalid base64 data");
+            call.reject("Invalid base64 data", ERR_INVALID_ARGUMENT);
             return;
         }
 
@@ -400,7 +408,7 @@ public class TcpSocketPlugin extends Plugin {
                           () -> {
                               if (settled.compareAndSet(false, true)) {
                                   peerGone(clientIndex, client);
-                                  call.reject("Send timed out");
+                                  call.reject("Send timed out", ERR_TIMEOUT);
                               }
                           },
                           timeout,
@@ -408,7 +416,7 @@ public class TcpSocketPlugin extends Plugin {
                       );
         } catch (RejectedExecutionException e) {
             // handleOnDestroy shut the watchdog down: the plugin is going away.
-            call.reject("Plugin released");
+            call.reject("Plugin released", ERR_CLOSED);
             return;
         }
 
@@ -439,21 +447,23 @@ public class TcpSocketPlugin extends Plugin {
                         watchdog.cancel(false);
                     }
                     if (client.socket.isClosed()) {
-                        call.reject("Socket closed");
+                        call.reject("Socket closed", ERR_CLOSED);
                     } else {
                         // Broken pipe / connection reset: the peer is gone.
                         peerGone(clientIndex, client);
-                        call.reject(e.getMessage());
+                        call.reject(e.getMessage(), ERR_IO_ERROR);
                     }
                 }
             });
         } catch (RejectedExecutionException e) {
-            // Out of threads: nothing was written.
+            // Out of threads: nothing was written, and this client cannot send any more.
+            // Closed like a dropped connection, as IO_ERROR promises.
             if (settled.compareAndSet(false, true)) {
                 if (watchdog != null) {
                     watchdog.cancel(false);
                 }
-                call.reject(String.valueOf(e.getMessage()));
+                peerGone(clientIndex, client);
+                call.reject(String.valueOf(e.getMessage()), ERR_IO_ERROR);
             }
         }
     }
@@ -466,16 +476,16 @@ public class TcpSocketPlugin extends Plugin {
         final int timeout = Math.min(Math.max(0, call.getInt("timeout", 10)), MAX_TIMEOUT_SECONDS);
 
         if (clientIndex == -1 || length <= 0) {
-            call.reject("Client or length not specified");
+            call.reject("Client or length not specified", ERR_INVALID_ARGUMENT);
             return;
         }
         final Client client = clientAt(clientIndex);
         if (client == null) {
-            call.reject("Invalid client index");
+            call.reject("Invalid client index", ERR_INVALID_ARGUMENT);
             return;
         }
         if (client.socket.isClosed()) {
-            call.reject("Socket closed");
+            call.reject("Socket closed", ERR_CLOSED);
             return;
         }
 
@@ -503,10 +513,10 @@ public class TcpSocketPlugin extends Plugin {
             } catch (IOException e) {
                 if (client.socket.isClosed()) {
                     // disconnect() closed it while we were waiting
-                    call.reject("Socket closed");
+                    call.reject("Socket closed", ERR_CLOSED);
                 } else {
                     peerGone(clientIndex, client);
-                    call.reject(e.getMessage());
+                    call.reject(e.getMessage(), ERR_IO_ERROR);
                 }
             }
         }).start();
@@ -516,12 +526,12 @@ public class TcpSocketPlugin extends Plugin {
     public void disconnect(PluginCall call) {
         final int clientIndex = call.getInt("client", -1);
         if (clientIndex == -1) {
-            call.reject("No client specified");
+            call.reject("No client specified", ERR_INVALID_ARGUMENT);
             return;
         }
         final Client client = clientAt(clientIndex);
         if (client == null) {
-            call.reject("Invalid client index");
+            call.reject("Invalid client index", ERR_INVALID_ARGUMENT);
             return;
         }
         synchronized (client) {
@@ -529,9 +539,8 @@ public class TcpSocketPlugin extends Plugin {
                 // Idempotent: closing a closed socket is a no-op. A blocked read on this
                 // socket gets "Socket closed" from its own thread.
                 client.socket.close();
-            } catch (IOException e) {
-                call.reject(e.getMessage());
-                return;
+            } catch (IOException ignored) {
+                // the socket is unusable either way, and its slot is released below
             }
         }
         release(clientIndex, client);
@@ -545,7 +554,7 @@ public class TcpSocketPlugin extends Plugin {
     public void listen(PluginCall call) {
         final int port = call.getInt("port", 9100);
         if (port < 0 || port > 65535) {
-            call.reject("Port out of range: " + port);
+            call.reject("Port out of range: " + port, ERR_INVALID_ARGUMENT);
             return;
         }
 
@@ -557,7 +566,7 @@ public class TcpSocketPlugin extends Plugin {
         try {
             server = new ServerSocket(port);
         } catch (IOException e) {
-            call.reject(e.getMessage());
+            call.reject(e.getMessage(), ERR_LISTEN_FAILED);
             return;
         }
         final int serverIndex = addServer(server);
@@ -633,6 +642,7 @@ public class TcpSocketPlugin extends Plugin {
 
         JSObject ret = new JSObject();
         ret.put("server", serverIndex);
+        ret.put("port", server.getLocalPort());
         call.resolve(ret);
     }
 
@@ -686,12 +696,12 @@ public class TcpSocketPlugin extends Plugin {
     public void stopListening(PluginCall call) {
         final int serverIndex = call.getInt("server", -1);
         if (serverIndex == -1) {
-            call.reject("No server specified");
+            call.reject("No server specified", ERR_INVALID_ARGUMENT);
             return;
         }
         final ServerSocket server = serverAt(serverIndex);
         if (server == null) {
-            call.reject("Invalid server index");
+            call.reject("Invalid server index", ERR_INVALID_ARGUMENT);
             return;
         }
 
@@ -699,9 +709,8 @@ public class TcpSocketPlugin extends Plugin {
             // Closing the socket is what ends the accept loop: it makes the
             // pending accept() throw, and the thread returns.
             server.close();
-        } catch (IOException e) {
-            call.reject(e.getMessage());
-            return;
+        } catch (IOException ignored) {
+            // closing is best effort, as in closeAll(): the accept loop ends either way
         }
         call.resolve();
     }

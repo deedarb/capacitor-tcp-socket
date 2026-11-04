@@ -2,9 +2,10 @@ import type { ElectronPluginContext } from '@capawesome/capacitor-electron/plugi
 import { app, webContents } from 'electron';
 import type { WebContents } from 'electron';
 import { createConnection, createServer, Socket } from 'node:net';
-import type { Server } from 'node:net';
+import type { AddressInfo, Server } from 'node:net';
 import { networkInterfaces } from 'node:os';
 
+import { base64Of } from '../../src/contract';
 import type {
   ConnectOptions,
   ConnectResult,
@@ -17,6 +18,7 @@ import type {
   ReadResult,
   SendOptions,
   StopListeningOptions,
+  TcpSocketErrorCode,
 } from '../../src/definitions';
 
 const DEFAULT_PORT = 9100;
@@ -33,13 +35,6 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
  * iOS and Android get for free by reading straight off the socket.
  */
 const MAX_BUFFERED_BYTES = 256 * 1024;
-
-/**
- * Base64 alphabet with up to two trailing `=`; the length (a multiple of 4) is checked
- * apart. Not a `(?:x{4})*` group: V8 backtracks through one stack frame per group and
- * overflows the stack on a payload of a few megabytes.
- */
-const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /** Virtual, tunnel and cellular interfaces: useless to peers on the LAN. */
 const IGNORED_INTERFACE_PREFIX = /^(utun|awdl|llw|ppp|tun|tap|rmnet|docker|veth|br-|bridge)/i;
@@ -276,7 +271,7 @@ class TcpSocketElectron {
   async connect(options: ConnectOptions): Promise<ConnectResult> {
     const ipAddress = options?.ipAddress;
     if (!ipAddress) {
-      throw new Error('Must provide ip address to connect');
+      throw codedError('INVALID_ARGUMENT', 'Must provide ip address to connect');
     }
     const port = options.port ?? DEFAULT_PORT;
     // 0 means no timeout, as on Android.
@@ -288,12 +283,12 @@ class TcpSocketElectron {
       const onTimeout = () => {
         cleanUp();
         pending.destroy();
-        reject(new Error(`Connection to ${ipAddress}:${port} timed out after ${timeoutMs}ms`));
+        reject(codedError('CONNECT_FAILED', `Connection to ${ipAddress}:${port} timed out after ${timeoutMs}ms`));
       };
       const onError = (error: Error) => {
         cleanUp();
         pending.destroy();
-        reject(error);
+        reject(codedError('CONNECT_FAILED', error.message, error));
       };
       const cleanUp = () => {
         // setTimeout() is an idle timer: armed before the connection is up it
@@ -314,14 +309,15 @@ class TcpSocketElectron {
     if (pageGeneration !== this.generation) {
       // The page reloaded while connecting: nobody is left to use this socket.
       socket.destroy();
-      throw new Error(SOCKET_CLOSED);
+      throw codedError('CLOSED', SOCKET_CLOSED);
     }
     return { client: this.addClient(socket) };
   }
 
   async send(options: SendOptions): Promise<void> {
     const { index, client } = this.openClient(options?.client);
-    const data = decodeBase64(options?.data);
+    // Checked again for callers that go around the web layer's wrapper, by the same rule.
+    const data = Buffer.from(base64Of(options?.data), 'base64');
     // 0 (the default) = no limit, as before. Clamped: past MAX_TIMER_MS setTimeout fires at once.
     const timeoutMs = Math.min(Math.max(0, options?.timeout ?? 0) * 1000, MAX_TIMER_MS);
 
@@ -336,7 +332,7 @@ class TcpSocketElectron {
               if (!settled) {
                 settled = true;
                 this.peerGone(index, client);
-                reject(new Error(SEND_TIMED_OUT));
+                reject(codedError('TIMEOUT', SEND_TIMED_OUT));
               }
             }, timeoutMs)
           : undefined;
@@ -352,11 +348,11 @@ class TcpSocketElectron {
         if (!error) {
           resolve();
         } else if (client.isClosed) {
-          reject(new Error(SOCKET_CLOSED));
+          reject(codedError('CLOSED', SOCKET_CLOSED));
         } else {
           // Broken pipe / connection reset: the peer is gone.
           this.peerGone(index, client);
-          reject(error);
+          reject(codedError('IO_ERROR', error.message, error));
         }
       });
     });
@@ -373,7 +369,7 @@ class TcpSocketElectron {
       for (;;) {
         if (client.isClosed) {
           // disconnect() closed it while this read was queued or waiting.
-          throw new Error(SOCKET_CLOSED);
+          throw codedError('CLOSED', SOCKET_CLOSED);
         }
         // Buffered bytes first: what already arrived is owed to the caller even
         // when the peer has since closed the connection.
@@ -386,7 +382,7 @@ class TcpSocketElectron {
         if (failure) {
           // Connection reset and the like: the peer is gone.
           this.peerGone(index, client);
-          throw failure;
+          throw codedError('IO_ERROR', failure.message, failure);
         }
         if (client.isExhausted) {
           // End of stream: the peer closed. Report it once; further reads are rejected.
@@ -434,13 +430,13 @@ class TcpSocketElectron {
         // its id must report an invalid server, not a silent success.
         this.servers[serverIndex] = undefined;
         server.close();
-        reject(error);
+        reject(codedError('LISTEN_FAILED', error.message, error));
       };
       // A page reload (closeAll) closed it before it was up: 'listening' never comes.
       const onClose = () => {
         server.removeListener('error', onError);
         server.on('error', () => undefined);
-        reject(new Error(SOCKET_CLOSED));
+        reject(codedError('CLOSED', SOCKET_CLOSED));
       };
       server.once('error', onError);
       server.once('close', onClose);
@@ -460,17 +456,18 @@ class TcpSocketElectron {
       }
     });
 
-    return { server: serverIndex };
+    // A TCP server's address is an AddressInfo; a string only for pipes and Unix sockets.
+    return { server: serverIndex, port: (server.address() as AddressInfo).port };
   }
 
   async stopListening(options: StopListeningOptions): Promise<void> {
     const serverIndex = options?.server ?? -1;
     if (serverIndex === -1) {
-      throw new Error('No server specified');
+      throw codedError('INVALID_ARGUMENT', 'No server specified');
     }
     const server = this.servers[serverIndex];
     if (!server) {
-      throw new Error('Invalid server index');
+      throw codedError('INVALID_ARGUMENT', 'Invalid server index');
     }
     // Stops accepting at once; clients already accepted stay open, so the
     // callback (fired once they are all gone) is not waited for. The server
@@ -513,11 +510,11 @@ class TcpSocketElectron {
   private client(clientIndex: number | undefined): { index: number; client: Client } {
     const index = clientIndex ?? -1;
     if (index === -1) {
-      throw new Error('No client specified');
+      throw codedError('INVALID_ARGUMENT', 'No client specified');
     }
     const client = this.clients[index];
     if (!client) {
-      throw new Error('Invalid client index');
+      throw codedError('INVALID_ARGUMENT', 'Invalid client index');
     }
     return { index, client };
   }
@@ -525,7 +522,7 @@ class TcpSocketElectron {
   private openClient(clientIndex: number | undefined): { index: number; client: Client } {
     const { index, client } = this.client(clientIndex);
     if (client.isClosed) {
-      throw new Error(SOCKET_CLOSED);
+      throw codedError('CLOSED', SOCKET_CLOSED);
     }
     return { index, client };
   }
@@ -581,15 +578,13 @@ function isAppPage(url: string): boolean {
   return colon > 0 && !WEB_SCHEMES.has(url.slice(0, colon).toLowerCase());
 }
 
-function decodeBase64(data: string | undefined): Buffer {
-  if (data === undefined || data === null) {
-    throw new Error('No data provided');
-  }
-  const compact = data.replace(/\s/g, '');
-  if (compact.length % 4 !== 0 || !BASE64.test(compact)) {
-    throw new Error('Invalid base64 data');
-  }
-  return Buffer.from(compact, 'base64');
+/**
+ * An Error with one of the plugin's codes: the platform hands `code` and the message on to the
+ * web layer, nothing else. Node's own code (`ECONNREFUSED`, `EPIPE`) stays in the message, and
+ * the original error in `cause` for the main process's logs.
+ */
+function codedError(code: TcpSocketErrorCode, message: string, cause?: Error): Error {
+  return Object.assign(new Error(message, cause ? { cause } : undefined), { code });
 }
 
 /** `::ffff:192.168.1.42` from a dual-stack listener is the peer's IPv4 address. */

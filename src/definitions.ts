@@ -59,6 +59,35 @@ export interface TcpSocketPlugin {
 
 // types
 
+/**
+ * `code` of a rejected call, the same on iOS, Android and Electron. Branch on it, not on the
+ * message: that is diagnostic text and differs between platforms.
+ *
+ * - `INVALID_ARGUMENT`: the options are not valid (checked before the call reaches the native
+ *   side), or the client / server id was never handed out.
+ * - `CLOSED`: the client is closed — by `disconnect`, after `disconnection`, or with the page
+ *   that opened it.
+ * - `TIMEOUT`: `send` timed out; the client is closed with it.
+ * - `CONNECT_FAILED`: `connect` failed: refused, unreachable, unknown host, or timed out.
+ * - `LISTEN_FAILED`: `listen` could not bind the port.
+ * - `IO_ERROR`: a `read` / `send` failed (connection reset, broken pipe); the peer is gone and
+ *   `disconnection` has fired.
+ * - `UNIMPLEMENTED`: not available on this platform (the browser).
+ *
+ * @since 8.4.0
+ */
+export type TcpSocketErrorCode =
+  'INVALID_ARGUMENT' | 'CLOSED' | 'TIMEOUT' | 'CONNECT_FAILED' | 'LISTEN_FAILED' | 'IO_ERROR' | 'UNIMPLEMENTED';
+
+/**
+ * Shape of a rejection from this plugin.
+ *
+ * @since 8.4.0
+ */
+export interface TcpSocketError extends Error {
+  code: TcpSocketErrorCode;
+}
+
 export interface ConnectOptions {
   ipAddress: string;
   port?: number;
@@ -93,8 +122,12 @@ export interface SendOptions {
 
 export interface ReadOptions {
   client: number;
-  /** Upper bound for one read, in bytes. */
-  expectLen: number;
+  /**
+   * Upper bound for one read, in bytes.
+   *
+   * default: 1024
+   */
+  expectLen?: number;
   /**
    * timeout in seconds; 0 returns at once with whatever is already there.
    *
@@ -124,7 +157,8 @@ export interface DisconnectResult {
 
 export interface ListenOptions {
   /**
-   * Port to accept connections on.
+   * Port to accept connections on; 0 lets the system pick a free one, reported in
+   * `ListenResult.port`.
    *
    * default: 9100
    */
@@ -134,6 +168,12 @@ export interface ListenOptions {
 export interface ListenResult {
   /** Handle of the listening socket, for {@link TcpSocketPlugin.stopListening}. */
   server: number;
+  /**
+   * Port the socket is bound to: the one asked for, or the one the system picked for 0.
+   *
+   * @since 8.4.0
+   */
+  port: number;
 }
 
 export interface StopListeningOptions {
