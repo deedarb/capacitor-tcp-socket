@@ -116,6 +116,16 @@ public class TcpSocketPlugin: CAPPlugin {
     /// Rejection for a call whose work outlived the plugin (bridge torn down meanwhile).
     private static let pluginReleased = "Plugin released"
 
+    /// `code` of a rejection, the same on every platform: `TcpSocketErrorCode` in definitions.ts.
+    enum ErrorCode {
+        static let invalidArgument = "INVALID_ARGUMENT"
+        static let closed = "CLOSED"
+        static let timeout = "TIMEOUT"
+        static let connectFailed = "CONNECT_FAILED"
+        static let listenFailed = "LISTEN_FAILED"
+        static let ioError = "IO_ERROR"
+    }
+
     /// Pause after the first failed accept, in seconds; doubled on each failure in a row, up to the max.
     private static let acceptRetryDelay = 0.2
     private static let acceptRetryMaxDelay = 5.0
@@ -178,7 +188,7 @@ public class TcpSocketPlugin: CAPPlugin {
 
     @objc func connect(_ call: CAPPluginCall) {
         guard let ip = call.getString("ipAddress") else {
-            call.reject("Must provide ip address to connect")
+            call.reject("Must provide ip address to connect", ErrorCode.invalidArgument)
             return
         }
         let port = Int32(call.getInt("port", 9100))
@@ -192,7 +202,7 @@ public class TcpSocketPlugin: CAPPlugin {
         let pageGeneration = currentGeneration()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else {
-                call.reject(TcpSocketPlugin.pluginReleased)
+                call.reject(TcpSocketPlugin.pluginReleased, ErrorCode.closed)
                 return
             }
             do {
@@ -208,12 +218,12 @@ public class TcpSocketPlugin: CAPPlugin {
                 self.clientsLock.unlock()
                 guard let index = clientIndex else {
                     // The page reloaded while connecting: nobody is left to use this socket.
-                    call.reject("Socket closed")
+                    call.reject("Socket closed", ErrorCode.closed)
                     return
                 }
                 call.resolve(["client": index])
             } catch {
-                call.reject(error.localizedDescription)
+                call.reject(error.localizedDescription, ErrorCode.connectFailed)
             }
         }
     }
@@ -221,26 +231,26 @@ public class TcpSocketPlugin: CAPPlugin {
     @objc func send(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
         if clientIndex == -1 {
-            call.reject("No client specified")
+            call.reject("No client specified", ErrorCode.invalidArgument)
             return
         }
 
         guard let client = client(at: clientIndex) else {
-            call.reject("Invalid client index")
+            call.reject("Invalid client index", ErrorCode.invalidArgument)
             return
         }
         guard client.isOpen else {
-            call.reject("Socket closed")
+            call.reject("Socket closed", ErrorCode.closed)
             return
         }
 
         guard let base64Data = call.getString("data") else {
-            call.reject("No data provided")
+            call.reject("No data provided", ErrorCode.invalidArgument)
             return
         }
         // Decode base64 string to raw Data
         guard let decodedData = Data(base64Encoded: base64Data) else {
-            call.reject("Invalid base64 data")
+            call.reject("Invalid base64 data", ErrorCode.invalidArgument)
             return
         }
 
@@ -257,7 +267,7 @@ public class TcpSocketPlugin: CAPPlugin {
             // The peer is not reading; the socket is of no use with half a message in it.
             // The write loop notices the close within a second and stops.
             self?.peerGone(clientIndex, client)
-            call.reject("Send timed out")
+            call.reject("Send timed out", ErrorCode.timeout)
         }
         if let watchdog = watchdog {
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .seconds(timeoutSec), execute: watchdog)
@@ -270,7 +280,7 @@ public class TcpSocketPlugin: CAPPlugin {
             guard let self = self else {
                 if once.settle() {
                     watchdog?.cancel()
-                    call.reject(TcpSocketPlugin.pluginReleased)
+                    call.reject(TcpSocketPlugin.pluginReleased, ErrorCode.closed)
                 }
                 return
             }
@@ -284,11 +294,11 @@ public class TcpSocketPlugin: CAPPlugin {
             case .sent:
                 call.resolve()
             case .closed:
-                call.reject("Socket closed")
+                call.reject("Socket closed", ErrorCode.closed)
             case .failed(let err):
                 // Broken pipe / connection reset: the peer is gone.
                 self.peerGone(clientIndex, client)
-                call.reject(String(cString: strerror(err)))
+                call.reject(String(cString: strerror(err)), ErrorCode.ioError)
             }
         }
     }
@@ -345,16 +355,16 @@ public class TcpSocketPlugin: CAPPlugin {
     @objc func read(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
         if clientIndex == -1 {
-            call.reject("No client specified")
+            call.reject("No client specified", ErrorCode.invalidArgument)
             return
         }
 
         guard let client = client(at: clientIndex) else {
-            call.reject("Invalid client index")
+            call.reject("Invalid client index", ErrorCode.invalidArgument)
             return
         }
         guard client.isOpen else {
-            call.reject("Socket closed")
+            call.reject("Socket closed", ErrorCode.closed)
             return
         }
 
@@ -368,26 +378,40 @@ public class TcpSocketPlugin: CAPPlugin {
         // forever on a peer that connected and went silent.
         client.readQueue.async { [weak self] in
             guard let self = self else {
-                call.reject(TcpSocketPlugin.pluginReleased)
+                call.reject(TcpSocketPlugin.pluginReleased, ErrorCode.closed)
                 return
             }
             let fd = client.socket.socketfd
             guard fd != Socket.SOCKET_INVALID_DESCRIPTOR else {
-                call.reject("Socket closed")
+                call.reject("Socket closed", ErrorCode.closed)
                 return
             }
 
             // Not BlueSocket's isReadableOrWritable: it selects on read AND write, and a freshly
             // accepted socket is always writable, so it returns at once with nothing to read.
             var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&pfd, 1, Int32(clamping: timeoutMs))
+            let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+            var ready = poll(&pfd, 1, Int32(clamping: timeoutMs))
+            var pollError = errno
+            while ready < 0 && pollError == EINTR {
+                // A signal cut the wait short: wait out the rest of the timeout.
+                let left = max(0, Int(deadline.timeIntervalSinceNow * 1000))
+                ready = poll(&pfd, 1, Int32(clamping: left))
+                pollError = errno
+            }
             if ready == 0 {
                 // Peer connected and went silent: not an error for the caller, just nothing to read.
                 call.resolve(["result": ""])
                 return
             }
             if ready < 0 {
-                call.reject(String(cString: strerror(errno)))
+                if client.socket.socketfd != fd {
+                    call.reject("Socket closed", ErrorCode.closed)
+                } else {
+                    // IO_ERROR promises a closed client and a `disconnection` event.
+                    self.peerGone(clientIndex, client)
+                    call.reject(String(cString: strerror(pollError)), ErrorCode.ioError)
+                }
                 return
             }
             // One recv, at most `expectLen` bytes — same as Android. Not BlueSocket's read(into:):
@@ -399,7 +423,7 @@ public class TcpSocketPlugin: CAPPlugin {
             client.lock.lock()
             guard client.socket.socketfd == fd else {
                 client.lock.unlock()
-                call.reject("Socket closed")
+                call.reject("Socket closed", ErrorCode.closed)
                 return
             }
             let count = Darwin.recv(fd, &buffer, expectLen, MSG_DONTWAIT)
@@ -417,11 +441,11 @@ public class TcpSocketPlugin: CAPPlugin {
                 call.resolve(["result": ""])
             } else {
                 if client.socket.socketfd != fd {
-                    call.reject("Socket closed")
+                    call.reject("Socket closed", ErrorCode.closed)
                 } else {
                     // Connection reset and the like: the peer is gone.
                     self.peerGone(clientIndex, client)
-                    call.reject(String(cString: strerror(err)))
+                    call.reject(String(cString: strerror(err)), ErrorCode.ioError)
                 }
             }
         }
@@ -430,12 +454,12 @@ public class TcpSocketPlugin: CAPPlugin {
     @objc func disconnect(_ call: CAPPluginCall) {
         let clientIndex = call.getInt("client", -1)
         if clientIndex == -1 {
-            call.reject("No client specified")
+            call.reject("No client specified", ErrorCode.invalidArgument)
             return
         }
 
         guard let client = client(at: clientIndex) else {
-            call.reject("Invalid client index")
+            call.reject("Invalid client index", ErrorCode.invalidArgument)
             return
         }
         // Idempotent: closing a closed socket is a no-op. A read waiting on this socket
@@ -523,9 +547,9 @@ public class TcpSocketPlugin: CAPPlugin {
                     self.clientsLock.unlock()
                 }
             }
-            call.resolve(["server": serverIndex])
+            call.resolve(["server": serverIndex, "port": Int(server.listeningPort)])
         } catch {
-            call.reject(error.localizedDescription)
+            call.reject(error.localizedDescription, ErrorCode.listenFailed)
         }
     }
 
@@ -576,7 +600,7 @@ public class TcpSocketPlugin: CAPPlugin {
     @objc func stopListening(_ call: CAPPluginCall) {
         let serverIndex = call.getInt("server", -1)
         if serverIndex == -1 {
-            call.reject("No server specified")
+            call.reject("No server specified", ErrorCode.invalidArgument)
             return
         }
 
@@ -584,7 +608,7 @@ public class TcpSocketPlugin: CAPPlugin {
         let found = servers[safe: serverIndex]
         serversLock.unlock()
         guard let server = found else {
-            call.reject("Invalid server index")
+            call.reject("Invalid server index", ErrorCode.invalidArgument)
             return
         }
 

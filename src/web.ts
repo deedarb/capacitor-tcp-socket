@@ -1,46 +1,37 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
-  ConnectOptions,
   ConnectResult,
-  DisconnectOptions,
   DisconnectResult,
-  ListenOptions,
   ListenResult,
-  ReadOptions,
   ReadResult,
-  SendOptions,
-  StopListeningOptions,
   TcpSocketPlugin,
   LocalAddressResult,
 } from './definitions';
 
+const NO_TCP = 'TCP sockets are not available in the browser';
+
+// Rejected with code UNIMPLEMENTED. The options are not logged: `send` would print the payload.
 export class TcpSocketWeb extends WebPlugin implements TcpSocketPlugin {
-  connect(options: ConnectOptions): Promise<ConnectResult> {
-    console.log('connect', options);
-    throw new Error('Method not implemented.');
+  async connect(): Promise<ConnectResult> {
+    throw this.unimplemented(NO_TCP);
   }
-  send(options: SendOptions): Promise<void> {
-    console.log('send', options);
-    throw new Error('Method not implemented.');
+  async send(): Promise<void> {
+    throw this.unimplemented(NO_TCP);
   }
-  read(options: ReadOptions): Promise<ReadResult> {
-    console.log('read', options);
-    throw new Error('Method not implemented.');
+  async read(): Promise<ReadResult> {
+    throw this.unimplemented(NO_TCP);
   }
-  disconnect(options: DisconnectOptions): Promise<DisconnectResult> {
-    console.log('disconnect', options);
-    throw new Error('Method not implemented.');
+  async disconnect(): Promise<DisconnectResult> {
+    throw this.unimplemented(NO_TCP);
   }
   // Browsers cannot accept inbound TCP connections at all — this is not a gap
   // in the web implementation, there is no API to build it on.
-  listen(options: ListenOptions): Promise<ListenResult> {
-    console.log('listen', options);
-    throw new Error('Method not implemented.');
+  async listen(): Promise<ListenResult> {
+    throw this.unimplemented(NO_TCP);
   }
-  stopListening(options: StopListeningOptions): Promise<void> {
-    console.log('stopListening', options);
-    throw new Error('Method not implemented.');
+  async stopListening(): Promise<void> {
+    throw this.unimplemented(NO_TCP);
   }
 
   async getLocalAddress(): Promise<LocalAddressResult> {

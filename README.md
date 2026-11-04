@@ -94,6 +94,53 @@ does not end `listen` on iOS and Android: the socket retries, backing off up
 to 5 s between attempts. Only one that keeps failing for a whole minute is
 closed (logged, no event); `listen` again to recover.
 
+### Errors
+
+Every rejection carries a `code` (8.4.0+), the same on iOS, Android and
+Electron — branch on it, not on the message, which is diagnostic text:
+
+| `code`             | When                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `INVALID_ARGUMENT` | The options are not valid, or the client / server id was never handed out.           |
+| `CLOSED`           | The client is closed: by `disconnect`, after `disconnection`, or with its page.        |
+| `TIMEOUT`          | `send` timed out; the client is closed with it.                                       |
+| `CONNECT_FAILED`   | `connect` failed: refused, unreachable, unknown host, or timed out.                   |
+| `LISTEN_FAILED`    | `listen` could not bind the port.                                                     |
+| `IO_ERROR`         | A `read` / `send` failed (reset, broken pipe); `disconnection` has fired.             |
+| `UNIMPLEMENTED`    | Not available on this platform (the browser).                                         |
+
+```ts
+try {
+  await TcpSocket.send({ client, data });
+} catch (error) {
+  if ((error as TcpSocketError).code === 'CLOSED') {
+    // reconnect
+  }
+}
+```
+
+Options are checked before the call reaches the native side, so a malformed
+value is refused the same way everywhere: ports must be integers in range,
+timeouts and ids whole numbers, 0 or more (a timeout past 2³¹−1 seconds is
+clamped). `data` may contain line breaks and may omit its `=` padding; both
+are normalised before sending.
+
+### Upgrading to 8.4
+
+- Values the platforms used to coerce silently are now refused with
+  `INVALID_ARGUMENT`: a negative or fractional timeout or id, a port given as
+  a string or out of range (`connect` to port 0 included), and `send` without
+  `data` (Android used to send nothing and resolve).
+- Electron: `error.code` used to be Node's own (`ECONNREFUSED`, `EADDRINUSE`,
+  `ECONNRESET`, …); it is now one of the codes above, and Node's code stays in
+  the message (`connect ECONNREFUSED 127.0.0.1:9100`).
+- Android: `disconnect` and `stopListening` no longer reject when closing the
+  socket fails — it is unusable either way, and its id is released.
+- `listen` resolves with the bound `port` as well, so `port: 0` lets the
+  system pick a free one.
+- The browser implementation rejects with `UNIMPLEMENTED` and no longer logs
+  the options (`send` used to print its payload to the console).
+
 ### iOS: local network permission
 
 iOS 14+ **silently** blocks local network access unless the app declares it —
@@ -373,7 +420,7 @@ fire it.
 | Prop            | Type                | Description                                                                       |
 | --------------- | ------------------- | --------------------------------------------------------------------------------- |
 | **`client`**    | <code>number</code> |                                                                                   |
-| **`expectLen`** | <code>number</code> | Upper bound for one read, in bytes.                                               |
+| **`expectLen`** | <code>number</code> | Upper bound for one read, in bytes. default: 1024                                 |
 | **`timeout`**   | <code>number</code> | timeout in seconds; 0 returns at once with whatever is already there. default: 10 |
 
 
@@ -393,16 +440,17 @@ fire it.
 
 #### ListenResult
 
-| Prop         | Type                | Description                                                                |
-| ------------ | ------------------- | -------------------------------------------------------------------------- |
-| **`server`** | <code>number</code> | Handle of the listening socket, for {@link TcpSocketPlugin.stopListening}. |
+| Prop         | Type                | Description                                                                         | Since |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------- | ----- |
+| **`server`** | <code>number</code> | Handle of the listening socket, for {@link TcpSocketPlugin.stopListening}.          |       |
+| **`port`**   | <code>number</code> | Port the socket is bound to: the one asked for, or the one the system picked for 0. | 8.4.0 |
 
 
 #### ListenOptions
 
-| Prop       | Type                | Description                                  |
-| ---------- | ------------------- | -------------------------------------------- |
-| **`port`** | <code>number</code> | Port to accept connections on. default: 9100 |
+| Prop       | Type                | Description                                                                                                      |
+| ---------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **`port`** | <code>number</code> | Port to accept connections on; 0 lets the system pick a free one, reported in `ListenResult.port`. default: 9100 |
 
 
 #### StopListeningOptions
